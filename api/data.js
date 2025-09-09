@@ -1,29 +1,44 @@
-// api/data.js
-import fetch from 'node-fetch';
-
-// นี่คือ Serverless Function ของเรา
 export default async function handler(request, response) {
-  // 1. ดึง Access Token และ Ad Account ID ที่เก็บไว้อย่างปลอดภัย
-  const FB_ACCESS_TOKEN = process.env.FB_ACCESS_TOKEN;
-  const AD_ACCOUNT_ID = process.env.FB_AD_ACCOUNT_ID;
-
-  // 2. สร้าง URL สำหรับยิงไปที่ Facebook Graph API
-  const url = `https://graph.facebook.com/v19.0/${AD_ACCOUNT_ID}/campaigns?fields=name,status,insights{spend,clicks,impressions}&access_token=${FB_ACCESS_TOKEN}`;
-
   try {
-    // 3. ยิง API ไปที่ Facebook
-    const facebookResponse = await fetch(url);
-    const data = await facebookResponse.json();
+    if (request.method !== 'GET') {
+      return response.status(405).json({ error: 'Method not allowed' });
+    }
 
-    // 4. ตั้งค่า CORS Header (สำคัญมาก!) เพื่ออนุญาตให้ React App ของคุณเรียกใช้ API นี้ได้
+    const FB_ACCESS_TOKEN = process.env.FB_ACCESS_TOKEN;
+    const AD_ACCOUNT_ID = process.env.FB_AD_ACCOUNT_ID;
+    
+    if (!FB_ACCESS_TOKEN || !AD_ACCOUNT_ID) {
+      return response.status(500).json({ 
+        error: 'Missing environment variables'
+      });
+    }
+
+    const url = `https://graph.facebook.com/v19.0/${AD_ACCOUNT_ID}/campaigns?fields=name,status,insights{spend,clicks,impressions}&access_token=${FB_ACCESS_TOKEN}`;
+    
+    // ใช้ fetch built-in ของ Vercel (ไม่ต้อง import)
+    const facebookResponse = await fetch(url);
+    
+    if (!facebookResponse.ok) {
+      const errorText = await facebookResponse.text();
+      return response.status(facebookResponse.status).json({
+        error: 'Facebook API error',
+        status: facebookResponse.status,
+        message: errorText
+      });
+    }
+    
+    const data = await facebookResponse.json();
+    
     response.setHeader('Access-Control-Allow-Origin', '*');
     response.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-
-    // 5. ส่งข้อมูลที่ได้จาก Facebook กลับไปเป็นคำตอบ
-    response.status(200).json(data);
-
+    
+    return response.status(200).json(data);
+    
   } catch (error) {
-    // จัดการกรณีเกิดข้อผิดพลาด
-    response.status(500).json({ error: 'Failed to fetch data from Facebook API' });
+    console.error('Error:', error);
+    return response.status(500).json({ 
+      error: 'Function failed',
+      message: error.message
+    });
   }
 }
