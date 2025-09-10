@@ -1,5 +1,6 @@
+import { FacebookAdsApi, AdAccount } from 'facebook-nodejs-business-sdk';
+
 export default async function handler(req, res) {
-  // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -10,39 +11,42 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Get environment variables
     const accessToken = process.env.FB_ACCESS_TOKEN;
     const adAccountId = process.env.AD_ACCOUNT_ID;
 
-    // Validate environment variables
-    if (!accessToken) {
+    if (!accessToken || !adAccountId) {
       return res.status(500).json({ 
-        error: 'Missing FB_ACCESS_TOKEN in environment variables'
+        error: 'Missing environment variables'
       });
     }
 
-    if (!adAccountId) {
-      return res.status(500).json({ 
-        error: 'Missing AD_ACCOUNT_ID in environment variables'
-      });
-    }
+    // Initialize Facebook Ads API
+    FacebookAdsApi.init(accessToken);
+    
+    // Create AdAccount instance
+    const account = new AdAccount(adAccountId);
 
-    // Simple response first (without Facebook SDK)
+    // Get campaigns
+    const campaigns = await account.getCampaigns([
+      'id', 'name', 'status'
+    ]);
+
     res.status(200).json({
       success: true,
-      message: 'API is working',
       data: {
-        accessToken: accessToken ? 'Set' : 'Not Set',
-        adAccountId: adAccountId ? 'Set' : 'Not Set',
-        timestamp: new Date().toISOString()
+        campaigns: campaigns.map(c => ({
+          id: c.id,
+          name: c.name,
+          status: c.status
+        })),
+        total: campaigns.length
       }
     });
 
   } catch (error) {
-    console.error('API Error:', error);
-    return res.status(500).json({
-      error: 'Internal server error',
-      details: error.message
+    console.error('Facebook API Error:', error);
+    res.status(500).json({
+      error: error.message
     });
   }
 }
