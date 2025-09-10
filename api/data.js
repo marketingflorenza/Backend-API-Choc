@@ -1,12 +1,13 @@
 // api/data.js
 
-// ใช้ node-fetch เวอร์ชัน 2 เนื่องจากมีความเข้ากันได้ดีกับ CommonJS
+// โปรดตรวจสอบว่าได้ติดตั้ง node-fetch เวอร์ชัน 2: npm install node-fetch@2
 const fetch = require('node-fetch');
 
 const accessToken = process.env.FB_ACCESS_TOKEN; // ควรเก็บ Access Token ใน Environment Variables ของ Vercel
 const adAccountId = process.env.AD_ACCOUNT_ID; // ควรเก็บ Ad Account ID ใน Environment Variables
 
-export default async function handler(req, res) {
+// เปลี่ยนมาใช้ module.exports สำหรับโปรเจกต์ที่เป็น CommonJS
+module.exports = async (req, res) => {
   // ตรวจสอบว่ามี Access Token และ Ad Account ID หรือไม่
   if (!accessToken || !adAccountId) {
     return res.status(500).json({ error: 'Facebook API credentials are not configured.' });
@@ -34,4 +35,5 @@ export default async function handler(req, res) {
     console.error('Server-side fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch data from Facebook API.' });
   }
-}
+};
+
