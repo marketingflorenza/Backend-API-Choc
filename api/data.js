@@ -1,39 +1,48 @@
 // api/data.js
-
-// โปรดตรวจสอบว่าได้ติดตั้ง node-fetch เวอร์ชัน 2: npm install node-fetch@2
 const fetch = require('node-fetch');
 
-const accessToken = process.env.FB_ACCESS_TOKEN; // ควรเก็บ Access Token ใน Environment Variables ของ Vercel
-const adAccountId = process.env.AD_ACCOUNT_ID; // ควรเก็บ Ad Account ID ใน Environment Variables
+const accessToken = process.env.FB_ACCESS_TOKEN;
+const adAccountId = process.env.AD_ACCOUNT_ID;
 
-// เปลี่ยนมาใช้ module.exports สำหรับโปรเจกต์ที่เป็น CommonJS
 module.exports = async (req, res) => {
-  // ตรวจสอบว่ามี Access Token และ Ad Account ID หรือไม่
+  // 1. ตรวจสอบว่าได้ตั้งค่า Environment Variables ครบถ้วนหรือไม่
   if (!accessToken || !adAccountId) {
-    return res.status(500).json({ error: 'Facebook API credentials are not configured.' });
+    console.error('Server Error: Missing FB_ACCESS_TOKEN or AD_ACCOUNT_ID in Vercel Environment Variables.');
+    return res.status(500).json({ 
+      error: 'API credentials are not configured on the server.',
+      message: 'Please contact the administrator.' 
+    });
   }
 
-  // URL สำหรับเรียกข้อมูลแคมเปญจาก Facebook Graph API
   const url = `https://graph.facebook.com/v18.0/${adAccountId}/campaigns?fields=name,status,insights{spend,clicks,impressions}&access_token=${accessToken}`;
 
   try {
     const response = await fetch(url);
     const data = await response.json();
 
-    // หาก Facebook API ส่ง error กลับมา
+    // 2. ตรวจสอบว่า Facebook API ส่ง Error กลับมาหรือไม่
     if (data.error) {
-      console.error('Facebook API Error:', data.error);
-      return res.status(500).json({ error: data.error.message });
+      // Log error ที่ได้รับจาก Facebook ทั้งหมดออกมา เพื่อการดีบักที่ง่ายขึ้น
+      console.error('Facebook API Error Response:', JSON.stringify(data.error, null, 2));
+      
+      // ส่งข้อความ error ที่ชัดเจนกลับไป
+      return res.status(500).json({ 
+        error: 'An error occurred while fetching data from Facebook.',
+        details: data.error.message 
+      });
     }
 
-    // ส่งข้อมูล `data` ที่เป็น Array กลับไปโดยตรง
-    // โครงสร้างที่ Frontend คาดหวังคือ { "data": [...] }
-    res.setHeader('Access-Control-Allow-Origin', '*'); // อนุญาตให้โดเมนอื่นเรียกใช้ API นี้ได้
+    // 3. ถ้าทุกอย่างถูกต้อง ให้ส่งข้อมูลกลับไป
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.status(200).json(data);
 
   } catch (error) {
-    console.error('Server-side fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch data from Facebook API.' });
+    // 4. ดักจับ Error ที่เกิดจากการเชื่อมต่อ (เช่น network error)
+    console.error('Server-side fetch failed:', error);
+    res.status(500).json({ 
+      error: 'Failed to connect to Facebook API.',
+      details: error.message 
+    });
   }
 };
 
