@@ -313,7 +313,8 @@ export default async function handler(req, res) {
         },
         utc_info: {
           server_time: new Date().toISOString(),
-          range_days: Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1
+          range_days: Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1,
+          ad_account_timezone: adAccountTimezone
         }
       },
       summary: {
