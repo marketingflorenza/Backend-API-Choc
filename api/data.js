@@ -21,19 +21,52 @@ export default async function handler(req, res) {
     // รับค่าช่วงเวลาจาก query parameters
     const { since, until } = req.query;
     
+    // ฟังก์ชันแปลงวันที่จาก DD-MM-YYYY เป็น YYYY-MM-DD
+    function convertDateFormat(dateStr) {
+      if (!dateStr) return null;
+      
+      const parts = dateStr.split('-');
+      if (parts.length !== 3) return null;
+      
+      const day = parts[0].padStart(2, '0');
+      const month = parts[1].padStart(2, '0');
+      const year = parts[2];
+      
+      // ตรวจสอบว่าเป็นตัวเลขหรือไม่
+      if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+      if (day < 1 || day > 31 || month < 1 || month > 12 || year < 1900) return null;
+      
+      return `${year}-${month}-${day}`;
+    }
+
     // กำหนดค่า default หากไม่มีการส่งมา
     const today = new Date();
     const thirtyDaysAgo = new Date(today.getTime() - (30 * 24 * 60 * 60 * 1000));
     
-    const dateStart = since || thirtyDaysAgo.toISOString().split('T')[0];
-    const dateStop = until || today.toISOString().split('T')[0];
-
-    // Validate date format (YYYY-MM-DD)
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if ((since && !dateRegex.test(since)) || (until && !dateRegex.test(until))) {
-      return res.status(400).json({
-        error: 'Invalid date format. Use YYYY-MM-DD format'
-      });
+    let dateStart, dateStop;
+    
+    if (since) {
+      const convertedSince = convertDateFormat(since);
+      if (!convertedSince) {
+        return res.status(400).json({
+          error: 'Invalid since date format. Use DD-MM-YYYY format (e.g., 31-01-2024)'
+        });
+      }
+      dateStart = convertedSince;
+    } else {
+      dateStart = thirtyDaysAgo.toISOString().split('T')[0];
+    }
+    
+    if (until) {
+      const convertedUntil = convertDateFormat(until);
+      if (!convertedUntil) {
+        return res.status(400).json({
+          error: 'Invalid until date format. Use DD-MM-YYYY format (e.g., 31-01-2024)'
+        });
+      }
+      dateStop = convertedUntil;
+    } else {
+      dateStop = today.toISOString().split('T')[0];
     }
 
     // Validate date range
@@ -46,7 +79,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Check if date range is not too far in the past (Facebook API limitation)
+    // Check if date range is not too far in the past
     const maxDaysBack = 365;
     const maxDate = new Date(today.getTime() - (maxDaysBack * 24 * 60 * 60 * 1000));
     
@@ -72,7 +105,7 @@ export default async function handler(req, res) {
     const campaignsWithDetails = await Promise.all(
       campaigns.map(async (campaign) => {
         try {
-          // ใช้ช่วงเวลาที่รับมาจาก Frontend
+          // ใช้ช่วงเวลาที่แปลงแล้ว (YYYY-MM-DD format for Facebook API)
           const insightsResponse = await fetch(
             `https://graph.facebook.com/v18.0/${campaign.id}/insights?access_token=${accessToken}&fields=spend,impressions,clicks,reach,ctr,cpc,cpm&time_range={'since':'${dateStart}','until':'${dateStop}'}`
           );
@@ -180,12 +213,18 @@ export default async function handler(req, res) {
       }, 0);
     }, 0);
 
+    // แปลงวันที่กลับเป็น DD-MM-YYYY สำหรับ response
+    function formatDateForResponse(dateStr) {
+      const parts = dateStr.split('-');
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+
     res.status(200).json({
       success: true,
-      message: 'Facebook API with custom date range',
+      message: 'Facebook API with DD-MM-YYYY date format',
       dateRange: {
-        start: dateStart,
-        end: dateStop,
+        start: formatDateForResponse(dateStart),
+        end: formatDateForResponse(dateStop),
         requested: {
           since: since || 'auto (30 days ago)',
           until: until || 'auto (today)'
