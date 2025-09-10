@@ -1,6 +1,5 @@
-import { FacebookAdsApi, AdAccount } from 'facebook-nodejs-business-sdk';
-
 export default async function handler(req, res) {
+  // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -20,33 +19,32 @@ export default async function handler(req, res) {
       });
     }
 
-    // Initialize Facebook Ads API
-    FacebookAdsApi.init(accessToken);
-    
-    // Create AdAccount instance
-    const account = new AdAccount(adAccountId);
+    // ใช้ fetch แทน Facebook SDK เพื่อหลีกเลี่ยง import error
+    const response = await fetch(
+      `https://graph.facebook.com/v18.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status`
+    );
 
-    // Get campaigns
-    const campaigns = await account.getCampaigns([
-      'id', 'name', 'status'
-    ]);
+    if (!response.ok) {
+      throw new Error(`Facebook API error: ${response.status}`);
+    }
+
+    const data = await response.json();
 
     res.status(200).json({
       success: true,
+      message: 'Facebook API working',
       data: {
-        campaigns: campaigns.map(c => ({
-          id: c.id,
-          name: c.name,
-          status: c.status
-        })),
-        total: campaigns.length
+        campaigns: data.data || [],
+        total: data.data ? data.data.length : 0,
+        paging: data.paging || null
       }
     });
 
   } catch (error) {
-    console.error('Facebook API Error:', error);
+    console.error('API Error:', error);
     res.status(500).json({
-      error: error.message
+      error: error.message,
+      details: 'Check logs for more info'
     });
   }
 }
