@@ -1,44 +1,37 @@
-export default async function handler(request, response) {
+// api/data.js
+
+// ใช้ node-fetch เวอร์ชัน 2 เนื่องจากมีความเข้ากันได้ดีกับ CommonJS
+const fetch = require('node-fetch');
+
+const accessToken = process.env.FB_ACCESS_TOKEN; // ควรเก็บ Access Token ใน Environment Variables ของ Vercel
+const adAccountId = process.env.AD_ACCOUNT_ID; // ควรเก็บ Ad Account ID ใน Environment Variables
+
+export default async function handler(req, res) {
+  // ตรวจสอบว่ามี Access Token และ Ad Account ID หรือไม่
+  if (!accessToken || !adAccountId) {
+    return res.status(500).json({ error: 'Facebook API credentials are not configured.' });
+  }
+
+  // URL สำหรับเรียกข้อมูลแคมเปญจาก Facebook Graph API
+  const url = `https://graph.facebook.com/v18.0/${adAccountId}/campaigns?fields=name,status,insights{spend,clicks,impressions}&access_token=${accessToken}`;
+
   try {
-    if (request.method !== 'GET') {
-      return response.status(405).json({ error: 'Method not allowed' });
+    const response = await fetch(url);
+    const data = await response.json();
+
+    // หาก Facebook API ส่ง error กลับมา
+    if (data.error) {
+      console.error('Facebook API Error:', data.error);
+      return res.status(500).json({ error: data.error.message });
     }
 
-    const FB_ACCESS_TOKEN = process.env.FB_ACCESS_TOKEN;
-    const AD_ACCOUNT_ID = process.env.FB_AD_ACCOUNT_ID;
-    
-    if (!FB_ACCESS_TOKEN || !AD_ACCOUNT_ID) {
-      return response.status(500).json({ 
-        error: 'Missing environment variables'
-      });
-    }
+    // ส่งข้อมูล `data` ที่เป็น Array กลับไปโดยตรง
+    // โครงสร้างที่ Frontend คาดหวังคือ { "data": [...] }
+    res.setHeader('Access-Control-Allow-Origin', '*'); // อนุญาตให้โดเมนอื่นเรียกใช้ API นี้ได้
+    res.status(200).json(data);
 
-    const url = `https://graph.facebook.com/v19.0/${AD_ACCOUNT_ID}/campaigns?fields=name,status,insights{spend,clicks,impressions}&access_token=${FB_ACCESS_TOKEN}`;
-    
-    // ใช้ fetch built-in ของ Vercel (ไม่ต้อง import)
-    const facebookResponse = await fetch(url);
-    
-    if (!facebookResponse.ok) {
-      const errorText = await facebookResponse.text();
-      return response.status(facebookResponse.status).json({
-        error: 'Facebook API error',
-        status: facebookResponse.status,
-        message: errorText
-      });
-    }
-    
-    const data = await facebookResponse.json();
-    
-    response.setHeader('Access-Control-Allow-Origin', '*');
-    response.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-    
-    return response.status(200).json(data);
-    
   } catch (error) {
-    console.error('Error:', error);
-    return response.status(500).json({ 
-      error: 'Function failed',
-      message: error.message
-    });
+    console.error('Server-side fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch data from Facebook API.' });
   }
 }
