@@ -15,7 +15,7 @@ module.exports = (req, res) => {
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
 
-    // ตรวจสอบว่า mode และ token ถูกส่งมาหรือไม่
+    // ตรวจสอบว่ามี mode และ token ถูกส่งมาหรือไม่
     if (mode && token) {
       // ตรวจสอบว่า mode คือ 'subscribe' และ token ตรงกับที่เราตั้งไว้
       if (mode === 'subscribe' && token === VERIFY_TOKEN) {
@@ -23,10 +23,10 @@ module.exports = (req, res) => {
         res.status(200).send(challenge);
       } else {
         // ถ้าไม่ตรงกัน ให้ส่งสถานะ 403 Forbidden
-        res.sendStatus(403);
+        res.status(403).send('Forbidden');
       }
     } else {
-      res.sendStatus(400); // Bad Request
+      res.status(400).send('Bad Request'); // Bad Request
     }
   }
   // --- จัดการ POST Request สำหรับรับข้อความ ---
@@ -52,7 +52,7 @@ module.exports = (req, res) => {
       res.status(200).send('EVENT_RECEIVED');
     } else {
       // ถ้าไม่ใช่ event จาก page subscription ให้ส่ง 404 Not Found
-      res.sendStatus(404);
+      res.status(404).send('Not Found');
     }
   } else {
     // ถ้าไม่ใช่ GET หรือ POST
@@ -60,3 +60,4 @@ module.exports = (req, res) => {
     res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 };
+
