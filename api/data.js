@@ -18,11 +18,43 @@ export default async function handler(req, res) {
       });
     }
 
-    // กำหนดช่วงวันที่ (30 วันล่าสุด)
+    // รับค่าช่วงเวลาจาก query parameters
+    const { since, until } = req.query;
+    
+    // กำหนดค่า default หากไม่มีการส่งมา
     const today = new Date();
     const thirtyDaysAgo = new Date(today.getTime() - (30 * 24 * 60 * 60 * 1000));
-    const dateStart = thirtyDaysAgo.toISOString().split('T')[0];
-    const dateStop = today.toISOString().split('T')[0];
+    
+    const dateStart = since || thirtyDaysAgo.toISOString().split('T')[0];
+    const dateStop = until || today.toISOString().split('T')[0];
+
+    // Validate date format (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if ((since && !dateRegex.test(since)) || (until && !dateRegex.test(until))) {
+      return res.status(400).json({
+        error: 'Invalid date format. Use YYYY-MM-DD format'
+      });
+    }
+
+    // Validate date range
+    const startDate = new Date(dateStart);
+    const endDate = new Date(dateStop);
+    
+    if (startDate > endDate) {
+      return res.status(400).json({
+        error: 'Start date must be before end date'
+      });
+    }
+
+    // Check if date range is not too far in the past (Facebook API limitation)
+    const maxDaysBack = 365;
+    const maxDate = new Date(today.getTime() - (maxDaysBack * 24 * 60 * 60 * 1000));
+    
+    if (startDate < maxDate) {
+      return res.status(400).json({
+        error: `Date range cannot be more than ${maxDaysBack} days ago`
+      });
+    }
 
     // ดึงข้อมูล campaigns
     const campaignsResponse = await fetch(
@@ -40,7 +72,7 @@ export default async function handler(req, res) {
     const campaignsWithDetails = await Promise.all(
       campaigns.map(async (campaign) => {
         try {
-          // ดึง insights ของ campaign
+          // ใช้ช่วงเวลาที่รับมาจาก Frontend
           const insightsResponse = await fetch(
             `https://graph.facebook.com/v18.0/${campaign.id}/insights?access_token=${accessToken}&fields=spend,impressions,clicks,reach,ctr,cpc,cpm&time_range={'since':'${dateStart}','until':'${dateStop}'}`
           );
@@ -66,7 +98,6 @@ export default async function handler(req, res) {
           const adsWithImages = await Promise.all(
             ads.map(async (ad) => {
               try {
-                // ดึง ad creatives
                 const creativesResponse = await fetch(
                   `https://graph.facebook.com/v18.0/${ad.id}/adcreatives?access_token=${accessToken}&fields=id,name,object_story_spec,image_url,thumbnail_url`
                 );
@@ -76,7 +107,6 @@ export default async function handler(req, res) {
                   const creativesData = await creativesResponse.json();
                   const creatives = creativesData.data || [];
                   
-                  // ดึงรูปภาพจาก creatives
                   for (const creative of creatives) {
                     if (creative.image_url) {
                       images.push({
@@ -86,7 +116,6 @@ export default async function handler(req, res) {
                       });
                     }
                     
-                    // ดึงรูปจาก object_story_spec (สำหรับ post ads)
                     if (creative.object_story_spec?.link_data?.picture) {
                       images.push({
                         type: 'link_image',
@@ -145,7 +174,6 @@ export default async function handler(req, res) {
       totalReach: 0
     });
 
-    // นับรูปภาพทั้งหมด
     const totalImages = campaignsWithDetails.reduce((count, campaign) => {
       return count + campaign.ads.reduce((adCount, ad) => {
         return adCount + ad.images.length;
@@ -154,10 +182,14 @@ export default async function handler(req, res) {
 
     res.status(200).json({
       success: true,
-      message: 'Facebook API with campaigns, insights, and ad images',
+      message: 'Facebook API with custom date range',
       dateRange: {
         start: dateStart,
-        end: dateStop
+        end: dateStop,
+        requested: {
+          since: since || 'auto (30 days ago)',
+          until: until || 'auto (today)'
+        }
       },
       summary: {
         totalCampaigns: campaignsWithDetails.length,
