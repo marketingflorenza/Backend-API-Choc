@@ -1,12 +1,13 @@
 // api/data.js
-const fetch = require('node-fetch'); // Ensure you are using node-fetch v2 for require syntax
-
 const accessToken = process.env.FB_ACCESS_TOKEN;
 const adAccountId = process.env.AD_ACCOUNT_ID;
 
 // This is the main handler for Vercel Serverless Functions
 module.exports = async (req, res) => {
-  // ===================== CORS HEADERS (THE FIX) =====================
+  // Dynamically import node-fetch as it is an ES Module
+  const fetch = (await import('node-fetch')).default;
+
+  // ===================== CORS HEADERS =====================
   // This allows your frontend (running on a different domain) to make requests to this API
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*'); // Or specify your frontend domain for better security
