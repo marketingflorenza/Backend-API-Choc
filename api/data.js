@@ -48,8 +48,20 @@ export default async function handler(req, res) {
       return `${parts[2]}-${parts[1]}-${parts[0]}`;
     }
 
-    // กำหนดค่า default หากไม่มีการส่งมา
-    const today = new Date();
+    // ฟังก์ชันสำหรับสร้างวันที่ในรูปแบบ YYYY-MM-DD โดยใช้ UTC
+    function getUTCDateString(date) {
+      const year = date.getUTCFullYear();
+      const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(date.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    // กำหนดค่า default โดยใช้ UTC time เพื่อความสอดคล้องกับ Facebook API
+    const now = new Date();
+    
+    // Facebook API ใช้ timezone ของ ad account หรือ UTC
+    // เราจะใช้ UTC เป็นมาตรฐาน
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const thirtyDaysAgo = new Date(today.getTime() - (30 * 24 * 60 * 60 * 1000));
     
     let dateStart, dateStop;
@@ -66,7 +78,7 @@ export default async function handler(req, res) {
       }
       dateStart = convertedSince;
     } else {
-      dateStart = thirtyDaysAgo.toISOString().split('T')[0];
+      dateStart = getUTCDateString(thirtyDaysAgo);
       originalSince = formatDateForResponse(dateStart);
     }
     
@@ -80,13 +92,15 @@ export default async function handler(req, res) {
       }
       dateStop = convertedUntil;
     } else {
-      dateStop = today.toISOString().split('T')[0];
+      // Facebook API: until date หมายถึงวันสุดท้ายที่รวมในการคำนวณ (inclusive)
+      // ดังนั้นเราจะใช้วันปัจจุบัน หรือวันก่อนหน้าถ้าต้องการข้อมูลที่สมบูรณ์
+      dateStop = getUTCDateString(today);
       originalUntil = formatDateForResponse(dateStop);
     }
 
     // Validate date range
-    const startDate = new Date(dateStart);
-    const endDate = new Date(dateStop);
+    const startDate = new Date(dateStart + 'T00:00:00.000Z');
+    const endDate = new Date(dateStop + 'T00:00:00.000Z');
     
     if (startDate > endDate) {
       return res.status(400).json({
@@ -95,8 +109,8 @@ export default async function handler(req, res) {
       });
     }
 
-    // Check if date range is not too far in the past
-    const maxDaysBack = 365;
+    // ตรวจสอบว่าไม่ได้ขอข้อมูลย้อนหลังเกินไป (Facebook API มีข้อจำกัดเรื่องข้อมูลเก่า)
+    const maxDaysBack = 1095; // Facebook API อนุญาตให้ดึงข้อมูลย้อนหลังได้ประมาณ 3 ปี
     const maxDate = new Date(today.getTime() - (maxDaysBack * 24 * 60 * 60 * 1000));
     
     if (startDate < maxDate) {
@@ -106,13 +120,24 @@ export default async function handler(req, res) {
       });
     }
 
+    // ตรวจสอบว่าไม่ได้ขอข้อมูลอนาคต
+    if (startDate > today) {
+      return res.status(400).json({
+        success: false,
+        error: 'Start date cannot be in the future'
+      });
+    }
+
+    console.log(`Fetching Facebook API data for date range: ${dateStart} to ${dateStop}`);
+
     // ดึงข้อมูล campaigns
     const campaignsResponse = await fetch(
-      `https://graph.facebook.com/v18.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status,objective&limit=50`
+      `https://graph.facebook.com/v19.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status,objective,created_time,updated_time&limit=50`
     );
 
     if (!campaignsResponse.ok) {
       const errorText = await campaignsResponse.text();
+      console.error('Facebook API campaigns error:', errorText);
       throw new Error(`Facebook API campaigns error: ${campaignsResponse.status} - ${errorText}`);
     }
 
@@ -120,17 +145,27 @@ export default async function handler(req, res) {
     
     // ตรวจสอบ error จาก Facebook API
     if (campaignsData.error) {
-      throw new Error(`Facebook API Error: ${campaignsData.error.message}`);
+      console.error('Facebook API Error:', campaignsData.error);
+      throw new Error(`Facebook API Error: ${campaignsData.error.message} (Code: ${campaignsData.error.code})`);
     }
 
     const campaigns = campaignsData.data || [];
+    console.log(`Found ${campaigns.length} campaigns`);
 
     // ดึงข้อมูลสำหรับแต่ละ campaign
     const campaignsWithDetails = await Promise.all(
       campaigns.map(async (campaign) => {
         try {
-          // ใช้ช่วงเวลาที่แปลงแล้ว (YYYY-MM-DD format for Facebook API)
-          const insightsUrl = `https://graph.facebook.com/v18.0/${campaign.id}/insights?access_token=${accessToken}&fields=spend,impressions,clicks,reach,ctr,cpc,cpm&time_range={'since':'${dateStart}','until':'${dateStop}'}`;
+          // สร้าง URL สำหรับ insights โดยใช้ time_range ในรูปแบบที่ Facebook API ต้องการ
+          // Facebook API ต้องการ since และ until ในรูปแบบ YYYY-MM-DD
+          const timeRange = encodeURIComponent(JSON.stringify({
+            since: dateStart,
+            until: dateStop
+          }));
+          
+          const insightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=spend,impressions,clicks,reach,ctr,cpc,cpm,frequency,actions,cost_per_action_type&time_range=${timeRange}&level=campaign`;
+          
+          console.log(`Fetching insights for campaign ${campaign.id}:`, insightsUrl);
           
           const insightsResponse = await fetch(insightsUrl);
           
@@ -141,14 +176,18 @@ export default async function handler(req, res) {
               console.error(`Insights error for campaign ${campaign.id}:`, insightsData.error);
             } else {
               insights = insightsData.data?.[0] || null;
+              if (insights) {
+                console.log(`Got insights for campaign ${campaign.id}: spend=${insights.spend}, impressions=${insights.impressions}`);
+              }
             }
           } else {
-            console.error(`Insights API error for campaign ${campaign.id}:`, insightsResponse.status);
+            const errorText = await insightsResponse.text();
+            console.error(`Insights API error for campaign ${campaign.id}:`, insightsResponse.status, errorText);
           }
 
           // ดึง ads ของ campaign
           const adsResponse = await fetch(
-            `https://graph.facebook.com/v18.0/${campaign.id}/ads?access_token=${accessToken}&fields=id,name,status&limit=10`
+            `https://graph.facebook.com/v19.0/${campaign.id}/ads?access_token=${accessToken}&fields=id,name,status,created_time,updated_time&limit=10`
           );
 
           let ads = [];
@@ -159,14 +198,17 @@ export default async function handler(req, res) {
             } else {
               ads = adsData.data || [];
             }
+          } else {
+            const errorText = await adsResponse.text();
+            console.error(`Ads API error for campaign ${campaign.id}:`, adsResponse.status, errorText);
           }
 
-          // ดึงรูปภาพของ ads
+          // ดึงรูปภาพของ ads (จำกัดจำนวนเพื่อป้องกัน rate limit)
           const adsWithImages = await Promise.all(
-            ads.slice(0, 5).map(async (ad) => { // จำกัดที่ 5 ads เพื่อป้องกัน rate limit
+            ads.slice(0, 3).map(async (ad) => { // จำกัดที่ 3 ads เพื่อป้องกัน rate limit
               try {
                 const creativesResponse = await fetch(
-                  `https://graph.facebook.com/v18.0/${ad.id}/adcreatives?access_token=${accessToken}&fields=id,name,object_story_spec,image_url,thumbnail_url&limit=3`
+                  `https://graph.facebook.com/v19.0/${ad.id}/adcreatives?access_token=${accessToken}&fields=id,name,object_story_spec,image_url,thumbnail_url&limit=2`
                 );
 
                 let images = [];
@@ -195,6 +237,9 @@ export default async function handler(req, res) {
                       }
                     }
                   }
+                } else {
+                  const errorText = await creativesResponse.text();
+                  console.error(`Creatives API error for ad ${ad.id}:`, creativesResponse.status, errorText);
                 }
 
                 return {
@@ -202,7 +247,7 @@ export default async function handler(req, res) {
                   images: images
                 };
               } catch (error) {
-                console.error('Error fetching ad images:', error);
+                console.error(`Error fetching ad images for ${ad.id}:`, error);
                 return {
                   ...ad,
                   images: []
@@ -265,13 +310,18 @@ export default async function handler(req, res) {
         facebook_api_format: {
           since: dateStart,
           until: dateStop
+        },
+        utc_info: {
+          server_time: new Date().toISOString(),
+          range_days: Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1
         }
       },
       summary: {
         totalCampaigns: campaignsWithDetails.length,
         totalAds: campaignsWithDetails.reduce((count, c) => count + (c.ads?.length || 0), 0),
         totalImages: totalImages,
-        campaignsWithInsights: campaignsWithDetails.filter(c => c.insights).length
+        campaignsWithInsights: campaignsWithDetails.filter(c => c.insights).length,
+        campaignsWithErrors: campaignsWithDetails.filter(c => c.error).length
       },
       totals: {
         spend: parseFloat(totals.totalSpend.toFixed(2)),
@@ -305,7 +355,8 @@ export default async function handler(req, res) {
       success: false,
       error: error.message,
       details: 'Check server logs for more information',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 }
