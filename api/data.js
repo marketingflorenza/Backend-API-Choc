@@ -287,13 +287,13 @@ export default async function handler(req, res) {
           ...campaign,
           insights: campaign.insights ? {
             ...campaign.insights,
-            spend: parseFloat(campaign.insights.spend || 0),
+            spend: Math.round(parseFloat(campaign.insights.spend || 0) * 100) / 100,
             impressions: parseInt(campaign.insights.impressions || 0),
             clicks: parseInt(campaign.insights.clicks || 0),
             reach: parseInt(campaign.insights.reach || 0),
-            ctr: parseFloat(campaign.insights.ctr || 0),
-            cpc: parseFloat(campaign.insights.cpc || 0),
-            cpm: parseFloat(campaign.insights.cpm || 0)
+            ctr: Math.round(parseFloat(campaign.insights.ctr || 0) * 100) / 100,
+            cpc: Math.round(parseFloat(campaign.insights.cpc || 0) * 100) / 100,
+            cpm: Math.round(parseFloat(campaign.insights.cpm || 0) * 100) / 100
           } : null
         }))
       }
