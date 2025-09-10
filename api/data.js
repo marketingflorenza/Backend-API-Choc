@@ -19,6 +19,29 @@ export default async function handler(req, res) {
       });
     }
 
+    // First, get ad account timezone information
+    let adAccountTimezone = null;
+    try {
+      console.log('Fetching ad account timezone information...');
+      const accountResponse = await fetch(
+        `https://graph.facebook.com/v19.0/${adAccountId}?access_token=${accessToken}&fields=timezone_id,timezone_name,timezone_offset_hours_utc`
+      );
+      
+      if (accountResponse.ok) {
+        const accountData = await accountResponse.json();
+        if (!accountData.error) {
+          adAccountTimezone = accountData;
+          console.log('Ad Account Timezone:', adAccountTimezone);
+        } else {
+          console.error('Facebook API Error getting timezone:', accountData.error);
+        }
+      } else {
+        console.error('Failed to fetch ad account timezone:', accountResponse.status);
+      }
+    } catch (error) {
+      console.error('Error fetching ad account timezone:', error);
+    }
+
     // รับค่าช่วงเวลาจาก query parameters
     const { since, until } = req.query;
     
@@ -56,12 +79,22 @@ export default async function handler(req, res) {
       return `${year}-${month}-${day}`;
     }
 
-    // กำหนดค่า default โดยใช้ UTC time เพื่อความสอดคล้องกับ Facebook API
+    // กำหนดค่า default โดยคำนึงถึง timezone ของ ad account
     const now = new Date();
     
-    // Facebook API ใช้ timezone ของ ad account หรือ UTC
-    // เราจะใช้ UTC เป็นมาตรฐาน
-    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    // Facebook API ใช้ timezone ของ ad account (ไม่ใช่ UTC)
+    // เราต้องปรับให้ตรงกับ timezone ของ ad account
+    let timezoneOffset = 0; // Default UTC
+    if (adAccountTimezone && adAccountTimezone.timezone_offset_hours_utc) {
+      timezoneOffset = parseFloat(adAccountTimezone.timezone_offset_hours_utc);
+      console.log(`Using ad account timezone offset: ${timezoneOffset} hours`);
+    } else {
+      console.log('Using UTC timezone (default)');
+    }
+    
+    // คำนวณเวลาในโซนเวลาของ ad account
+    const accountNow = new Date(now.getTime() + (timezoneOffset * 60 * 60 * 1000));
+    const today = new Date(accountNow.getUTCFullYear(), accountNow.getUTCMonth(), accountNow.getUTCDate());
     const thirtyDaysAgo = new Date(today.getTime() - (30 * 24 * 60 * 60 * 1000));
     
     let dateStart, dateStop;
@@ -93,7 +126,7 @@ export default async function handler(req, res) {
       dateStop = convertedUntil;
     } else {
       // Facebook API: until date หมายถึงวันสุดท้ายที่รวมในการคำนวณ (inclusive)
-      // ดังนั้นเราจะใช้วันปัจจุบัน หรือวันก่อนหน้าถ้าต้องการข้อมูลที่สมบูรณ์
+      // ใช้วันปัจจุบันตาม timezone ของ ad account
       dateStop = getUTCDateString(today);
       originalUntil = formatDateForResponse(dateStop);
     }
@@ -152,20 +185,36 @@ export default async function handler(req, res) {
     const campaigns = campaignsData.data || [];
     console.log(`Found ${campaigns.length} campaigns`);
 
+    // ตรวจสอบว่าควรใช้ date_preset หรือ time_range
+    const isLast30Days = dateStart === getUTCDateString(thirtyDaysAgo) && dateStop === getUTCDateString(today);
+
     // ดึงข้อมูลสำหรับแต่ละ campaign
     const campaignsWithDetails = await Promise.all(
-      campaigns.map(async (campaign) => {
+      campaigns.map(async (campaign, index) => {
         try {
-          // สร้าง URL สำหรับ insights โดยใช้ time_range ในรูปแบบที่ Facebook API ต้องการ
-          // Facebook API ต้องการ since และ until ในรูปแบบ YYYY-MM-DD
-          const timeRange = encodeURIComponent(JSON.stringify({
-            since: dateStart,
-            until: dateStop
-          }));
+          // เพิ่ม delay เล็กน้อยเพื่อป้องกัน rate limit
+          if (index > 0) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+
+          // Alternative: Use date_preset for better consistency
+          // For recent data, you might want to use date_preset instead of time_range
+          let insightsUrl;
+          if (isLast30Days) {
+            // Use preset for standard 30-day range (more reliable)
+            insightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=spend,impressions,clicks,reach,ctr,cpc,cpm,frequency,actions,cost_per_action_type&date_preset=last_30d&level=campaign`;
+            console.log(`Using date_preset=last_30d for campaign ${campaign.id}`);
+          } else {
+            // Use custom time range
+            const timeRange = encodeURIComponent(JSON.stringify({
+              since: dateStart,
+              until: dateStop
+            }));
+            insightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=spend,impressions,clicks,reach,ctr,cpc,cpm,frequency,actions,cost_per_action_type&time_range=${timeRange}&level=campaign`;
+            console.log(`Using custom time_range for campaign ${campaign.id}: ${dateStart} to ${dateStop}`);
+          }
           
-          const insightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=spend,impressions,clicks,reach,ctr,cpc,cpm,frequency,actions,cost_per_action_type&time_range=${timeRange}&level=campaign`;
-          
-          console.log(`Fetching insights for campaign ${campaign.id}:`, insightsUrl);
+          console.log(`Fetching insights for campaign ${campaign.id}`);
           
           const insightsResponse = await fetch(insightsUrl);
           
@@ -178,6 +227,8 @@ export default async function handler(req, res) {
               insights = insightsData.data?.[0] || null;
               if (insights) {
                 console.log(`Got insights for campaign ${campaign.id}: spend=${insights.spend}, impressions=${insights.impressions}`);
+              } else {
+                console.log(`No insights data for campaign ${campaign.id}`);
               }
             }
           } else {
@@ -205,8 +256,13 @@ export default async function handler(req, res) {
 
           // ดึงรูปภาพของ ads (จำกัดจำนวนเพื่อป้องกัน rate limit)
           const adsWithImages = await Promise.all(
-            ads.slice(0, 3).map(async (ad) => { // จำกัดที่ 3 ads เพื่อป้องกัน rate limit
+            ads.slice(0, 3).map(async (ad, adIndex) => { // จำกัดที่ 3 ads เพื่อป้องกัน rate limit
               try {
+                // เพิ่ม delay เล็กน้อย
+                if (adIndex > 0) {
+                  await new Promise(resolve => setTimeout(resolve, 50));
+                }
+
                 const creativesResponse = await fetch(
                   `https://graph.facebook.com/v19.0/${ad.id}/adcreatives?access_token=${accessToken}&fields=id,name,object_story_spec,image_url,thumbnail_url&limit=2`
                 );
@@ -311,10 +367,15 @@ export default async function handler(req, res) {
           since: dateStart,
           until: dateStop
         },
-        utc_info: {
+        timezone_info: {
           server_time: new Date().toISOString(),
           range_days: Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1,
-          ad_account_timezone: adAccountTimezone
+          ad_account_timezone: adAccountTimezone || { 
+            timezone_name: 'UTC (default)', 
+            timezone_offset_hours_utc: 0,
+            note: 'Ad account timezone could not be retrieved'
+          },
+          used_date_preset: isLast30Days
         }
       },
       summary: {
