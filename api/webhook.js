@@ -1,5 +1,4 @@
-// api/webhook.js
-const { saveCustomerTracking, saveConversation } = require('../lib/firebase');
+// api/webhook.js - Simple version for testing
 
 module.exports = async (req, res) => {
   if (req.method === 'GET') {
@@ -21,35 +20,28 @@ module.exports = async (req, res) => {
   }
   else if (req.method === 'POST') {
     const body = req.body;
-    console.log('Received webhook event:', JSON.stringify(body, null, 2));
-
+    
+    console.log('=== WEBHOOK RECEIVED ===');
+    console.log('Body:', JSON.stringify(body, null, 2));
+    
     if (body.object === 'page') {
       for (const entry of body.entry) {
         if (entry.messaging) {
           for (const webhook_event of entry.messaging) {
             const sender_psid = webhook_event.sender.id;
+            console.log('Message from PSID:', sender_psid);
             
-            try {
-              await trackCustomerSource(sender_psid, webhook_event);
-              
-              if (webhook_event.message) {
-                await trackConversation(sender_psid, webhook_event.message, 'user', webhook_event.timestamp);
-              }
-              
-            } catch (error) {
-              console.error('Error processing webhook event:', error);
+            if (webhook_event.message) {
+              console.log('Message text:', webhook_event.message.text);
             }
           }
         }
       }
-      res.status(200).send('EVENT_RECEIVED');
-    } else {
-      res.status(404).send('Not Found');
     }
+    
+    res.status(200).send('EVENT_RECEIVED');
   } else {
     res.setHeader('Allow', ['GET', 'POST']);
     res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 };
-
-// เพิ่มฟังก์ชันที่ขาดหายไป...
