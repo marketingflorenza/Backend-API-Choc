@@ -33,54 +33,66 @@ export default async function handler(req, res) {
     
     const timeRange = encodeURIComponent(JSON.stringify({ since: dateStart, until: dateStop }));
     const insightFields = 'spend,impressions,clicks,inline_link_clicks,ctr,cpc,cpm,actions';
+    const adFields = 'ad_name,spend,impressions,actions,inline_link_clicks,thumbnail_url'; // ✨ ADDED: Fields for ads
+
+    const getPurchases = (actions) => {
+        if (!actions) return 0;
+        const purchaseAction = actions.find(a => a.action_type === 'purchase' || a.action_type === 'offsite_conversion.fb_pixel_purchase');
+        return purchaseAction ? parseInt(purchaseAction.value) : 0;
+    };
 
     // 1. Fetch aggregated totals
     const totalInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=account&use_unified_attribution_setting=true`;
     const totalInsightsResponse = await fetch(totalInsightsUrl);
-    if (!totalInsightsResponse.ok) throw new Error(`Facebook Total Insights API error`);
     const totalInsightsData = await totalInsightsResponse.json();
     const totals = totalInsightsData.data?.[0] || {};
-
-    // ✨ ADDED FOR DEBUGGING: Log all actions received from the API
-    console.log('All actions received from API:', JSON.stringify(totals.actions, null, 2));
     
-    // 2. Fetch daily data
-    const dailyInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=spend&time_range=${timeRange}&level=account&time_increment=1`;
-    const dailyInsightsResponse = await fetch(dailyInsightsUrl);
-    if (!dailyInsightsResponse.ok) throw new Error(`Facebook Daily Insights API error`);
-    const dailyInsightsData = await dailyInsightsResponse.json();
-    const dailySpend = (dailyInsightsData.data || []).map(d => ({ date: d.date_start, spend: parseFloat(d.spend || 0) }));
-
-    // 3. Fetch campaign breakdown
+    // 2. Fetch campaign list
     const campaignStatuses = ['ACTIVE', 'INACTIVE', 'ARCHIVED', 'PAUSED', 'DELETED', 'COMPLETED'];
     const filtering = encodeURIComponent(JSON.stringify([{ field: 'effective_status', operator: 'IN', value: campaignStatuses }]));
     const campaignsResponse = await fetch(`https://graph.facebook.com/v19.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status&limit=100&filtering=${filtering}`);
-    if (!campaignsResponse.ok) throw new Error(`Facebook campaigns API error`);
     const campaignsData = await campaignsResponse.json();
     const campaigns = campaignsData.data || [];
 
+    // ✨ MODIFIED: Fetch ads details inside each campaign
     const campaignsWithDetails = await Promise.all(
       campaigns.map(async (campaign) => {
+        // Fetch campaign-level insights
         const campaignInsightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=campaign&use_unified_attribution_setting=true`;
         const insightsResponse = await fetch(campaignInsightsUrl);
         const insightsData = await insightsResponse.json();
-        const insights = insightsData.data?.[0] || null;
-        return { ...campaign, insights };
+        const campaignInsights = insightsData.data?.[0] || null;
+
+        // Fetch ad-level insights and details for this campaign
+        const adsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/ads?access_token=${accessToken}&fields=name,adcreatives{thumbnail_url,image_url}&limit=50`;
+        const adsDataResponse = await fetch(adsUrl);
+        const adsData = await adsDataResponse.json();
+        const ads = adsData.data || [];
+
+        // Fetch insights for all ads in this campaign at once
+        const adInsightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=ad_id,spend,impressions,actions&time_range=${timeRange}&level=ad`;
+        const adInsightsResponse = await fetch(adInsightsUrl);
+        const adInsightsData = await adInsightsResponse.json();
+        const adInsights = adInsightsData.data || [];
+
+        // Combine ad data with its insights
+        const adsWithDetails = ads.map(ad => {
+          const insight = adInsights.find(i => i.ad_id === ad.id);
+          return {
+            id: ad.id,
+            name: ad.name,
+            thumbnail_url: ad.adcreatives?.data[0]?.thumbnail_url || 'https://via.placeholder.com/100',
+            insights: {
+              spend: parseFloat(insight?.spend || 0),
+              impressions: parseInt(insight?.impressions || 0),
+              purchases: getPurchases(insight?.actions),
+            }
+          };
+        });
+
+        return { ...campaign, insights: campaignInsights, ads: adsWithDetails };
       })
     );
-
-    // ✅ MODIFIED: Improved function to find purchase events with common names
-    const getPurchases = (actions) => {
-        if (!actions) return 0;
-        const purchaseAction = actions.find(action => 
-            action.action_type === 'purchase' || 
-            action.action_type === 'offsite_conversion.fb_pixel_purchase' ||
-            action.action_type === 'omni_purchase'
-        );
-        return purchaseAction ? parseInt(purchaseAction.value) : 0;
-    };
-    
-    const totalPurchases = getPurchases(totals.actions);
 
     res.status(200).json({
       success: true,
@@ -89,14 +101,13 @@ export default async function handler(req, res) {
         impressions: parseInt(totals.impressions || 0),
         clicks: parseInt(totals.clicks || 0),
         inline_link_clicks: parseInt(totals.inline_link_clicks || 0),
+        purchases: getPurchases(totals.actions),
         ctr: parseFloat(totals.ctr || 0),
         cpc: parseFloat(totals.cpc || 0),
         cpm: parseFloat(totals.cpm || 0),
-        purchases: totalPurchases,
       },
       data: { 
         campaigns: campaignsWithDetails,
-        dailySpend: dailySpend
       }
     });
 
