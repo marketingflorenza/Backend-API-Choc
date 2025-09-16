@@ -1,3 +1,6 @@
+require('dotenv').config();
+const admin = require('firebase-admin');
+
 // test-firebase.js
 const { saveCustomerTracking } = require('./lib/firebase');
 

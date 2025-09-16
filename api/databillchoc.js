@@ -39,10 +39,6 @@ export default async function handler(req, res) {
     };
     const getUTCDateString = (date) => date.toISOString().split('T')[0];
 
-    // =======================================================
-    // ✨ ADDED BACK: เพิ่มโค้ดส่วนที่หายไปกลับเข้ามา
-    // ส่วนนี้คือการสร้างตัวแปร dateStart และ dateStop
-    // =======================================================
     let dateStart, dateStop;
 
     const today = new Date();
@@ -67,7 +63,6 @@ export default async function handler(req, res) {
     } else {
       dateStop = getUTCDateString(today);
     }
-    // =======================================================
     
     console.log(`Fetching Facebook API data for date range: ${dateStart} to ${dateStop}`);
 
@@ -87,20 +82,60 @@ export default async function handler(req, res) {
     if (campaignsData.error) throw new Error(`Facebook API Error: ${campaignsData.error.message}`);
     const campaigns = campaignsData.data || [];
 
+    // =======================================================
+    // ✨ MODIFIED: ดึง Insights แบบรายวัน (time_increment=1) และรวมยอดรายวัน
+    // =======================================================
+    const dailySpendMap = new Map(); // Map เพื่อเก็บยอดใช้จ่ายรายวันทั้งหมด
+
     const campaignsWithDetails = await Promise.all(
       campaigns.map(async (campaign) => {
-        const insightFields = 'spend,impressions,clicks,inline_link_clicks,reach,ctr,cpc,cpm';
+        const insightFields = 'spend,impressions,clicks,inline_link_clicks,reach,ctr,cpc,cpm,date_start'; // เพิ่ม date_start
         const timeRange = encodeURIComponent(JSON.stringify({ since: dateStart, until: dateStop }));
-        const insightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=campaign&use_unified_attribution_setting=true`;
+        
+        // ✨ เพิ่ม time_increment=1 เพื่อดึงข้อมูลรายวัน
+        const insightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=campaign&use_unified_attribution_setting=true&time_increment=1`;
         
         const insightsResponse = await fetch(insightsUrl);
         const insightsData = await insightsResponse.json();
-        const insights = insightsData.data?.[0] || null;
+        const insights = insightsData.data || []; // insights เป็น Array ของข้อมูลรายวัน
 
-        return { ...campaign, insights };
+        // รวมยอดใช้จ่ายรายวันของทุกแคมเปญ
+        insights.forEach(dailyInsight => {
+          const date = dailyInsight.date_start;
+          const spend = parseFloat(dailyInsight.spend || 0);
+          dailySpendMap.set(date, (dailySpendMap.get(date) || 0) + spend);
+        });
+
+        // สำหรับข้อมูลรวมในตาราง campaign details เราจะรวมยอด insights ทั้งหมด
+        const totalInsightsForCampaign = insights.reduce((acc, dailyInsight) => {
+          acc.spend = (parseFloat(acc.spend || 0) + parseFloat(dailyInsight.spend || 0)).toString();
+          acc.impressions = (parseInt(acc.impressions || 0) + parseInt(dailyInsight.impressions || 0)).toString();
+          acc.clicks = (parseInt(acc.clicks || 0) + parseInt(dailyInsight.clicks || 0)).toString();
+          acc.inline_link_clicks = (parseInt(acc.inline_link_clicks || 0) + parseInt(dailyInsight.inline_link_clicks || 0)).toString();
+          // CTR, CPC, CPM ต้องคำนวณใหม่หลังจากรวมทั้งหมด
+          return acc;
+        }, { spend: '0', impressions: '0', clicks: '0', inline_link_clicks: '0' });
+
+        // คำนวณ CTR, CPC, CPM จากยอดรวม
+        const totalSpendNum = parseFloat(totalInsightsForCampaign.spend);
+        const totalImpressionsNum = parseInt(totalInsightsForCampaign.impressions);
+        const totalClicksNum = parseInt(totalInsightsForCampaign.clicks);
+
+        totalInsightsForCampaign.ctr = totalImpressionsNum > 0 ? ((totalClicksNum / totalImpressionsNum) * 100).toFixed(2) : '0.00';
+        totalInsightsForCampaign.cpc = totalClicksNum > 0 ? (totalSpendNum / totalClicksNum).toFixed(2) : '0.00';
+        totalInsightsForCampaign.cpm = totalImpressionsNum > 0 ? ((totalSpendNum / totalImpressionsNum) * 1000).toFixed(2) : '0.00';
+
+
+        return { ...campaign, insights: totalInsightsForCampaign }; // insights ตอนนี้คือยอดรวมทั้งหมดสำหรับตาราง
       })
     );
+    // =======================================================
     
+    // แปลง Map ของ dailySpend ให้เป็น Array ที่มี Date เรียงลำดับ
+    const sortedDailySpend = Array.from(dailySpendMap.entries())
+      .map(([date, spend]) => ({ date, spend }))
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+
     const totals = campaignsWithDetails.reduce((acc, campaign) => {
       if (campaign.insights) {
         acc.totalSpend += parseFloat(campaign.insights.spend || 0);
@@ -122,7 +157,10 @@ export default async function handler(req, res) {
         cpc: totals.totalClicks > 0 ? totals.totalSpend / totals.totalClicks : 0,
         cpm: totals.totalImpressions > 0 ? (totals.totalSpend / totals.totalImpressions) * 1000 : 0
       },
-      data: { campaigns: campaignsWithDetails }
+      data: { 
+        campaigns: campaignsWithDetails,
+        dailySpend: sortedDailySpend // ✨ ADDED: ส่งข้อมูลรายวันกลับไปด้วย
+      }
     });
 
   } catch (error) {
