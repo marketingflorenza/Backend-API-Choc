@@ -32,23 +32,25 @@ export default async function handler(req, res) {
     dateStop = until ? convertDateFormat(until) : getUTCDateString(today);
     
     const timeRange = encodeURIComponent(JSON.stringify({ since: dateStart, until: dateStop }));
-    const insightFields = 'spend,impressions,clicks,inline_link_clicks,ctr,cpc,cpm';
+    
+    // ✨ MODIFIED: เพิ่ม 'actions' เพื่อดึงข้อมูลการซื้อ
+    const insightFields = 'spend,impressions,clicks,inline_link_clicks,ctr,cpc,cpm,actions';
 
-    // 1. Fetch aggregated totals for accuracy
+    // 1. Fetch aggregated totals
     const totalInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=account&use_unified_attribution_setting=true`;
     const totalInsightsResponse = await fetch(totalInsightsUrl);
     if (!totalInsightsResponse.ok) throw new Error(`Facebook Total Insights API error`);
     const totalInsightsData = await totalInsightsResponse.json();
     const totals = totalInsightsData.data?.[0] || {};
     
-    // 2. Fetch daily data specifically for the chart
+    // 2. Fetch daily data
     const dailyInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=spend&time_range=${timeRange}&level=account&time_increment=1`;
     const dailyInsightsResponse = await fetch(dailyInsightsUrl);
     if (!dailyInsightsResponse.ok) throw new Error(`Facebook Daily Insights API error`);
     const dailyInsightsData = await dailyInsightsResponse.json();
     const dailySpend = (dailyInsightsData.data || []).map(d => ({ date: d.date_start, spend: parseFloat(d.spend || 0) }));
 
-    // 3. Fetch campaign breakdown for the table
+    // 3. Fetch campaign breakdown
     const campaignStatuses = ['ACTIVE', 'INACTIVE', 'ARCHIVED', 'PAUSED', 'DELETED', 'COMPLETED'];
     const filtering = encodeURIComponent(JSON.stringify([{ field: 'effective_status', operator: 'IN', value: campaignStatuses }]));
     const campaignsResponse = await fetch(`https://graph.facebook.com/v19.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status&limit=100&filtering=${filtering}`);
@@ -66,6 +68,15 @@ export default async function handler(req, res) {
       })
     );
 
+    // ✨ ADDED: ฟังก์ชันสำหรับหาจำนวนการซื้อจาก 'actions'
+    const getPurchases = (actions) => {
+        if (!actions) return 0;
+        const purchaseAction = actions.find(action => action.action_type === 'purchase');
+        return purchaseAction ? parseInt(purchaseAction.value) : 0;
+    };
+    
+    const totalPurchases = getPurchases(totals.actions);
+
     res.status(200).json({
       success: true,
       totals: {
@@ -76,6 +87,7 @@ export default async function handler(req, res) {
         ctr: parseFloat(totals.ctr || 0),
         cpc: parseFloat(totals.cpc || 0),
         cpm: parseFloat(totals.cpm || 0),
+        purchases: totalPurchases, // ✨ ADDED: ส่งค่าการซื้อกลับไป
       },
       data: { 
         campaigns: campaignsWithDetails,
