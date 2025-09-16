@@ -32,8 +32,6 @@ export default async function handler(req, res) {
     dateStop = until ? convertDateFormat(until) : getUTCDateString(today);
     
     const timeRange = encodeURIComponent(JSON.stringify({ since: dateStart, until: dateStop }));
-    
-    // ✨ MODIFIED: เพิ่ม 'actions' เพื่อดึงข้อมูลการซื้อ
     const insightFields = 'spend,impressions,clicks,inline_link_clicks,ctr,cpc,cpm,actions';
 
     // 1. Fetch aggregated totals
@@ -42,6 +40,9 @@ export default async function handler(req, res) {
     if (!totalInsightsResponse.ok) throw new Error(`Facebook Total Insights API error`);
     const totalInsightsData = await totalInsightsResponse.json();
     const totals = totalInsightsData.data?.[0] || {};
+
+    // ✨ ADDED FOR DEBUGGING: Log all actions received from the API
+    console.log('All actions received from API:', JSON.stringify(totals.actions, null, 2));
     
     // 2. Fetch daily data
     const dailyInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=spend&time_range=${timeRange}&level=account&time_increment=1`;
@@ -68,10 +69,14 @@ export default async function handler(req, res) {
       })
     );
 
-    // ✨ ADDED: ฟังก์ชันสำหรับหาจำนวนการซื้อจาก 'actions'
+    // ✅ MODIFIED: Improved function to find purchase events with common names
     const getPurchases = (actions) => {
         if (!actions) return 0;
-        const purchaseAction = actions.find(action => action.action_type === 'purchase');
+        const purchaseAction = actions.find(action => 
+            action.action_type === 'purchase' || 
+            action.action_type === 'offsite_conversion.fb_pixel_purchase' ||
+            action.action_type === 'omni_purchase'
+        );
         return purchaseAction ? parseInt(purchaseAction.value) : 0;
     };
     
@@ -87,7 +92,7 @@ export default async function handler(req, res) {
         ctr: parseFloat(totals.ctr || 0),
         cpc: parseFloat(totals.cpc || 0),
         cpm: parseFloat(totals.cpm || 0),
-        purchases: totalPurchases, // ✨ ADDED: ส่งค่าการซื้อกลับไป
+        purchases: totalPurchases,
       },
       data: { 
         campaigns: campaignsWithDetails,
