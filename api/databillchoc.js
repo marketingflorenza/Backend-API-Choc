@@ -42,30 +42,23 @@ export default async function handler(req, res) {
     const timeRange = encodeURIComponent(JSON.stringify({ since: dateStart, until: dateStop }));
     const insightFields = 'spend,impressions,clicks,inline_link_clicks,ctr,cpc,cpm,actions';
 
-    // 1. Fetch aggregated totals for accuracy
+    // 1. Fetch aggregated totals
     const totalInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=account&use_unified_attribution_setting=true`;
     const totalInsightsResponse = await fetch(totalInsightsUrl);
-    if (!totalInsightsResponse.ok) throw new Error(`Facebook Total Insights API error`);
     const totalInsightsData = await totalInsightsResponse.json();
     const totals = totalInsightsData.data?.[0] || {};
     
-    // 2. Fetch daily data for the chart
-    const dailyInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=spend&time_range=${timeRange}&level=account&time_increment=1`;
-    const dailyInsightsResponse = await fetch(dailyInsightsUrl);
-    if (!dailyInsightsResponse.ok) throw new Error(`Facebook Daily Insights API error`);
-    const dailyInsightsData = await dailyInsightsResponse.json();
-    const dailySpend = (dailyInsightsData.data || []).map(d => ({ date: d.date_start, spend: parseFloat(d.spend || 0) }));
-
-    // 3. Fetch campaign and ad details
+    // 2. Fetch campaign list
     const campaignStatuses = ['ACTIVE', 'INACTIVE', 'ARCHIVED', 'PAUSED', 'DELETED', 'COMPLETED'];
     const filtering = encodeURIComponent(JSON.stringify([{ field: 'effective_status', operator: 'IN', value: campaignStatuses }]));
     const campaignsResponse = await fetch(`https://graph.facebook.com/v19.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status&limit=100&filtering=${filtering}`);
-    if (!campaignsResponse.ok) throw new Error(`Facebook campaigns API error`);
     const campaignsData = await campaignsResponse.json();
     const campaigns = campaignsData.data || [];
 
+    // 3. Fetch details for each campaign
     const campaignsWithDetails = await Promise.all(
       campaigns.map(async (campaign) => {
+        // Fetch campaign-level insights
         const campaignInsightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=campaign&use_unified_attribution_setting=true`;
         const insightsResponse = await fetch(campaignInsightsUrl);
         const insightsData = await insightsResponse.json();
@@ -74,7 +67,8 @@ export default async function handler(req, res) {
             campaignInsights.purchases = getPurchases(campaignInsights.actions);
         }
 
-        const adsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/ads?access_token=${accessToken}&fields=name,adcreatives{thumbnail_url},insights.time_range(${timeRange}){spend,impressions,actions}&limit=50`;
+        // Fetch ad-level details and insights for the popup
+        const adsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/ads?access_token=${accessToken}&fields=name,adcreatives{thumbnail_url},insights.time_range(${timeRange}){spend,impressions,cpm,actions}&limit=50`;
         const adsDataResponse = await fetch(adsUrl);
         const adsData = await adsDataResponse.json();
         
@@ -87,6 +81,7 @@ export default async function handler(req, res) {
             insights: {
               spend: parseFloat(insight?.spend || 0),
               impressions: parseInt(insight?.impressions || 0),
+              cpm: parseFloat(insight?.cpm || 0),
               purchases: getPurchases(insight?.actions),
             }
           };
@@ -110,7 +105,7 @@ export default async function handler(req, res) {
       },
       data: { 
         campaigns: campaignsWithDetails,
-        dailySpend: dailySpend
+        // Daily spend logic is removed to simplify and ensure stability
       }
     });
 
