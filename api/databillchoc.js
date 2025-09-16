@@ -34,33 +34,25 @@ export default async function handler(req, res) {
     const timeRange = encodeURIComponent(JSON.stringify({ since: dateStart, until: dateStop }));
     const insightFields = 'spend,impressions,clicks,inline_link_clicks,ctr,cpc,cpm';
 
-    // =======================================================
-    // ✨ 1. ดึงยอดรวมทั้งหมด (Total Aggregated Data) เพื่อความแม่นยำ
-    // =======================================================
+    // 1. Fetch aggregated totals for accuracy
     const totalInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=account&use_unified_attribution_setting=true`;
     const totalInsightsResponse = await fetch(totalInsightsUrl);
-    if (!totalInsightsResponse.ok) throw new Error(`Facebook Total Insights API error: ${await totalInsightsResponse.text()}`);
+    if (!totalInsightsResponse.ok) throw new Error(`Facebook Total Insights API error`);
     const totalInsightsData = await totalInsightsResponse.json();
     const totals = totalInsightsData.data?.[0] || {};
     
-    // =======================================================
-    // ✨ 2. ดึงข้อมูลรายวัน (Daily Data) สำหรับกราฟโดยเฉพาะ
-    // =======================================================
-    const dailyInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=spend&time_range=${timeRange}&level=account&use_unified_attribution_setting=true&time_increment=1`;
+    // 2. Fetch daily data specifically for the chart
+    const dailyInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=spend&time_range=${timeRange}&level=account&time_increment=1`;
     const dailyInsightsResponse = await fetch(dailyInsightsUrl);
-    if (!dailyInsightsResponse.ok) throw new Error(`Facebook Daily Insights API error: ${await dailyInsightsResponse.text()}`);
+    if (!dailyInsightsResponse.ok) throw new Error(`Facebook Daily Insights API error`);
     const dailyInsightsData = await dailyInsightsResponse.json();
     const dailySpend = (dailyInsightsData.data || []).map(d => ({ date: d.date_start, spend: parseFloat(d.spend || 0) }));
 
-    // =======================================================
-    // ✨ 3. ดึงข้อมูลรายแคมเปญ (Campaign Breakdown) สำหรับตาราง
-    // =======================================================
+    // 3. Fetch campaign breakdown for the table
     const campaignStatuses = ['ACTIVE', 'INACTIVE', 'ARCHIVED', 'PAUSED', 'DELETED', 'COMPLETED'];
     const filtering = encodeURIComponent(JSON.stringify([{ field: 'effective_status', operator: 'IN', value: campaignStatuses }]));
-    const campaignsResponse = await fetch(
-      `https://graph.facebook.com/v19.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status&limit=100&filtering=${filtering}`
-    );
-    if (!campaignsResponse.ok) throw new Error(`Facebook campaigns API error: ${await campaignsResponse.text()}`);
+    const campaignsResponse = await fetch(`https://graph.facebook.com/v19.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status&limit=100&filtering=${filtering}`);
+    if (!campaignsResponse.ok) throw new Error(`Facebook campaigns API error`);
     const campaignsData = await campaignsResponse.json();
     const campaigns = campaignsData.data || [];
 
@@ -73,7 +65,6 @@ export default async function handler(req, res) {
         return { ...campaign, insights };
       })
     );
-    // =======================================================
 
     res.status(200).json({
       success: true,
@@ -88,7 +79,7 @@ export default async function handler(req, res) {
       },
       data: { 
         campaigns: campaignsWithDetails,
-        dailySpend: dailySpend // ส่งข้อมูลรายวันไปด้วย
+        dailySpend: dailySpend
       }
     });
 
