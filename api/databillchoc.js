@@ -27,7 +27,8 @@ export default async function handler(req, res) {
     const getUTCDateString = (date) => date.toISOString().split('T')[0];
     const getPurchases = (actions) => {
         if (!actions) return 0;
-        const purchaseAction = actions.find(a => a.action_type === 'purchase' || a.action_type === 'offsite_conversion.fb_pixel_purchase');
+        const purchaseEventNames = ['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_purchase'];
+        const purchaseAction = actions.find(a => purchaseEventNames.includes(a.action_type));
         return purchaseAction ? parseInt(purchaseAction.value) : 0;
     };
 
@@ -69,9 +70,12 @@ export default async function handler(req, res) {
         const insightsResponse = await fetch(campaignInsightsUrl);
         const insightsData = await insightsResponse.json();
         const campaignInsights = insightsData.data?.[0] || null;
+        if (campaignInsights) {
+            campaignInsights.purchases = getPurchases(campaignInsights.actions);
+        }
 
-        const adInsightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/ads?access_token=${accessToken}&fields=name,adcreatives{thumbnail_url},insights.time_range(${timeRange}){spend,impressions,actions}&limit=50`;
-        const adsDataResponse = await fetch(adInsightsUrl);
+        const adsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/ads?access_token=${accessToken}&fields=name,adcreatives{thumbnail_url},insights.time_range(${timeRange}){spend,impressions,actions}&limit=50`;
+        const adsDataResponse = await fetch(adsUrl);
         const adsData = await adsDataResponse.json();
         
         const adsWithDetails = (adsData.data || []).map(ad => {
@@ -79,7 +83,7 @@ export default async function handler(req, res) {
           return {
             id: ad.id,
             name: ad.name,
-            thumbnail_url: ad.adcreatives?.data[0]?.thumbnail_url || 'https://via.placeholder.com/100',
+            thumbnail_url: ad.adcreatives?.data[0]?.thumbnail_url || 'https://via.placeholder.com/150',
             insights: {
               spend: parseFloat(insight?.spend || 0),
               impressions: parseInt(insight?.impressions || 0),
