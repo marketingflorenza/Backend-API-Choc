@@ -19,7 +19,11 @@ export default async function handler(req, res) {
     const { since, until } = req.query;
     
     // Helper functions
-    const convertDateFormat = (dateStr) => { /* ... */ };
+    const convertDateFormat = (dateStr) => {
+      if (!dateStr) return null;
+      const parts = dateStr.split('-');
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    };
     const getUTCDateString = (date) => date.toISOString().split('T')[0];
     const getPurchases = (actions) => {
         if (!actions) return 0;
@@ -27,8 +31,7 @@ export default async function handler(req, res) {
         const purchaseAction = actions.find(a => purchaseEventNames.includes(a.action_type));
         return purchaseAction ? parseInt(purchaseAction.value) : 0;
     };
-    // ✨ ADDED: Helper function to get messaging conversations
-    const getMessagingConversations = (actions) => {
+     const getMessagingConversations = (actions) => {
         if (!actions) return 0;
         const messageAction = actions.find(a => a.action_type === 'onsite_conversion.messaging_conversation_started_7d');
         return messageAction ? parseInt(messageAction.value) : 0;
@@ -36,23 +39,33 @@ export default async function handler(req, res) {
 
     // Date range setup
     let dateStart, dateStop;
-    // ... (date logic) ...
+    const today = new Date();
+    const thirtyDaysAgo = new Date(new Date().setDate(today.getDate() - 29));
+    dateStart = since ? convertDateFormat(since) : getUTCDateString(thirtyDaysAgo);
+    dateStop = until ? convertDateFormat(until) : getUTCDateString(today);
     
     const timeRange = encodeURIComponent(JSON.stringify({ since: dateStart, until: dateStop }));
     const insightFields = 'spend,impressions,clicks,inline_link_clicks,ctr,cpc,cpm,actions';
 
-    // 1. Fetch aggregated totals
+    // 1. Fetch aggregated totals for accuracy
     const totalInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=account&use_unified_attribution_setting=true`;
     const totalInsightsResponse = await fetch(totalInsightsUrl);
+    if (!totalInsightsResponse.ok) throw new Error(`Facebook Total Insights API error`);
     const totalInsightsData = await totalInsightsResponse.json();
     const totals = totalInsightsData.data?.[0] || {};
     
-    // ... (daily data fetch logic) ...
+    // 2. Fetch daily data for the chart
+    const dailyInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=spend&time_range=${timeRange}&level=account&time_increment=1`;
+    const dailyInsightsResponse = await fetch(dailyInsightsUrl);
+    if (!dailyInsightsResponse.ok) throw new Error(`Facebook Daily Insights API error`);
+    const dailyInsightsData = await dailyInsightsResponse.json();
+    const dailySpend = (dailyInsightsData.data || []).map(d => ({ date: d.date_start, spend: parseFloat(d.spend || 0) }));
 
     // 3. Fetch campaign and ad details
     const campaignStatuses = ['ACTIVE', 'INACTIVE', 'ARCHIVED', 'PAUSED', 'DELETED', 'COMPLETED'];
     const filtering = encodeURIComponent(JSON.stringify([{ field: 'effective_status', operator: 'IN', value: campaignStatuses }]));
     const campaignsResponse = await fetch(`https://graph.facebook.com/v19.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status&limit=100&filtering=${filtering}`);
+    if (!campaignsResponse.ok) throw new Error(`Facebook campaigns API error`);
     const campaignsData = await campaignsResponse.json();
     const campaigns = campaignsData.data || [];
 
@@ -64,7 +77,7 @@ export default async function handler(req, res) {
         const campaignInsights = insightsData.data?.[0] || null;
         if (campaignInsights) {
             campaignInsights.purchases = getPurchases(campaignInsights.actions);
-            campaignInsights.messaging_conversations = getMessagingConversations(campaignInsights.actions); // ✨ ADDED
+            campaignInsights.messaging_conversations = getMessagingConversations(campaignInsights.actions);
         }
 
         const adsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/ads?access_token=${accessToken}&fields=name,adcreatives{thumbnail_url},insights.time_range(${timeRange}){spend,impressions,cpm,actions}&limit=50`;
@@ -74,14 +87,15 @@ export default async function handler(req, res) {
         const adsWithDetails = (adsData.data || []).map(ad => {
           const insight = ad.insights?.data?.[0];
           return {
-            id: ad.id, name: ad.name,
+            id: ad.id,
+            name: ad.name,
             thumbnail_url: ad.adcreatives?.data[0]?.thumbnail_url || 'https://via.placeholder.com/150',
             insights: {
               spend: parseFloat(insight?.spend || 0),
               impressions: parseInt(insight?.impressions || 0),
               cpm: parseFloat(insight?.cpm || 0),
               purchases: getPurchases(insight?.actions),
-              messaging_conversations: getMessagingConversations(insight?.actions), // ✨ ADDED
+              messaging_conversations: getMessagingConversations(insight?.actions),
             }
           };
         });
@@ -98,7 +112,7 @@ export default async function handler(req, res) {
         clicks: parseInt(totals.clicks || 0),
         inline_link_clicks: parseInt(totals.inline_link_clicks || 0),
         purchases: getPurchases(totals.actions),
-        messaging_conversations: getMessagingConversations(totals.actions), // ✨ ADDED
+        messaging_conversations: getMessagingConversations(totals.actions),
         ctr: parseFloat(totals.ctr || 0),
         cpc: parseFloat(totals.cpc || 0),
         cpm: parseFloat(totals.cpm || 0),
