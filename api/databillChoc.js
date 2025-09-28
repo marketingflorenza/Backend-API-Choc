@@ -1,95 +1,116 @@
+// pages/api/databillchoc.js
+
 export default async function handler(req, res) {
-  // CORS Headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // ================================================================
+  // 1. SETUP & CORS
+  // ================================================================
+  res.setHeader('Access-Control-Allow-Origin', '*'); // อนุญาตให้ทุกโดเมนเรียกใช้
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
+  // จัดการกับ OPTIONS request สำหรับ CORS pre-flight
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
   try {
+    // ================================================================
+    // 2. ENVIRONMENT VARIABLES & VALIDATION
+    // ================================================================
     const accessToken = process.env.FB_ACCESS_TOKEN;
     const adAccountId = process.env.AD_ACCOUNT_ID;
 
     if (!accessToken || !adAccountId) {
-      return res.status(500).json({ success: false, error: 'Missing environment variables' });
+      // ถ้าไม่มี Token หรือ Ad Account ID ใน .env.local ให้ส่ง Error กลับไป
+      return res.status(500).json({ success: false, error: 'Missing server environment variables (FB_ACCESS_TOKEN or AD_ACCOUNT_ID)' });
     }
 
-    const { since, until } = req.query;
-    
-    // Helper functions
-    const convertDateFormat = (dateStr) => {
-      if (!dateStr) return null;
-      const parts = dateStr.split('-');
-      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    // ================================================================
+    // 3. HELPER FUNCTIONS (สำหรับแยกข้อมูลจาก Facebook)
+    // ================================================================
+    const getActionValue = (actions, actionType) => {
+        if (!actions) return 0;
+        const action = actions.find(a => a.action_type === actionType);
+        return action ? parseInt(action.value, 10) : 0;
     };
-    const getUTCDateString = (date) => date.toISOString().split('T')[0];
+    
     const getPurchases = (actions) => {
         if (!actions) return 0;
         const purchaseEventNames = ['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_purchase'];
         const purchaseAction = actions.find(a => purchaseEventNames.includes(a.action_type));
-        return purchaseAction ? parseInt(purchaseAction.value) : 0;
+        return purchaseAction ? parseInt(purchaseAction.value, 10) : 0;
     };
-     const getMessagingConversations = (actions) => {
-        if (!actions) return 0;
-        const messageAction = actions.find(a => a.action_type === 'onsite_conversion.messaging_conversation_started_7d');
-        return messageAction ? parseInt(messageAction.value) : 0;
+    
+    const getMessagingConversations = (actions) => {
+        return getActionValue(actions, 'onsite_conversion.messaging_conversation_started_7d');
     };
 
-    // Date range setup
+    // ================================================================
+    // 4. DATE & PARAMETER SETUP
+    // ================================================================
+    const { since, until } = req.query;
+    
     let dateStart, dateStop;
-    const today = new Date();
-    const thirtyDaysAgo = new Date(new Date().setDate(today.getDate() - 29));
-    dateStart = since ? convertDateFormat(since) : getUTCDateString(thirtyDaysAgo);
-    dateStop = until ? convertDateFormat(until) : getUTCDateString(today);
+
+    if (since && until) {
+      // ใช้ข้อมูลจาก Front-end ถ้ามีส่งมา
+      dateStart = since;
+      dateStop = until;
+    } else {
+      // ถ้าไม่ ให้ใช้ค่าเริ่มต้น (30 วันล่าสุด)
+      const today = new Date();
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(today.getDate() - 29);
+      dateStart = thirtyDaysAgo.toISOString().split('T')[0];
+      dateStop = today.toISOString().split('T')[0];
+    }
     
     const timeRange = encodeURIComponent(JSON.stringify({ since: dateStart, until: dateStop }));
     const insightFields = 'spend,impressions,clicks,inline_link_clicks,ctr,cpc,cpm,actions';
+    const facebookApiVersion = 'v19.0'; // สามารถเปลี่ยนเวอร์ชันได้ในอนาคต
 
-    // 1. Fetch aggregated totals for accuracy
-    const totalInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=account&use_unified_attribution_setting=true`;
+    // ================================================================
+    // 5. FACEBOOK API CALLS
+    // ================================================================
+
+    // --- 5.1 ดึงข้อมูลภาพรวมทั้งหมด (Totals) ---
+    const totalInsightsUrl = `https://graph.facebook.com/${facebookApiVersion}/${adAccountId}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=account&use_unified_attribution_setting=true`;
     const totalInsightsResponse = await fetch(totalInsightsUrl);
-    if (!totalInsightsResponse.ok) throw new Error(`Facebook Total Insights API error`);
     const totalInsightsData = await totalInsightsResponse.json();
+    if (totalInsightsData.error) throw new Error(`Facebook API Error (Totals): ${totalInsightsData.error.message}`);
     const totals = totalInsightsData.data?.[0] || {};
     
-    // 2. Fetch daily data for the chart
-    const dailyInsightsUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights?access_token=${accessToken}&fields=spend&time_range=${timeRange}&level=account&time_increment=1`;
+    // --- 5.2 ดึงข้อมูลค่าใช้จ่ายรายวันสำหรับกราฟ (Daily Spend) ---
+    const dailyInsightsUrl = `https://graph.facebook.com/${facebookApiVersion}/${adAccountId}/insights?access_token=${accessToken}&fields=spend&time_range=${timeRange}&level=account&time_increment=1`;
     const dailyInsightsResponse = await fetch(dailyInsightsUrl);
-    if (!dailyInsightsResponse.ok) throw new Error(`Facebook Daily Insights API error`);
     const dailyInsightsData = await dailyInsightsResponse.json();
+    if (dailyInsightsData.error) throw new Error(`Facebook API Error (Daily Spend): ${dailyInsightsData.error.message}`);
     const dailySpend = (dailyInsightsData.data || []).map(d => ({ date: d.date_start, spend: parseFloat(d.spend || 0) }));
 
-    // 3. Fetch campaign and ad details
-    const campaignStatuses = ['ACTIVE', 'INACTIVE', 'ARCHIVED', 'PAUSED', 'DELETED', 'COMPLETED'];
-    const filtering = encodeURIComponent(JSON.stringify([{ field: 'effective_status', operator: 'IN', value: campaignStatuses }]));
-    const campaignsResponse = await fetch(`https://graph.facebook.com/v19.0/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status&limit=100&filtering=${filtering}`);
-    if (!campaignsResponse.ok) throw new Error(`Facebook campaigns API error`);
+    // --- 5.3 ดึงข้อมูลแคมเปญทั้งหมด ---
+    const campaignsUrl = `https://graph.facebook.com/${facebookApiVersion}/${adAccountId}/campaigns?access_token=${accessToken}&fields=id,name,status&limit=100`;
+    const campaignsResponse = await fetch(campaignsUrl);
     const campaignsData = await campaignsResponse.json();
+    if (campaignsData.error) throw new Error(`Facebook API Error (Campaigns): ${campaignsData.error.message}`);
     const campaigns = campaignsData.data || [];
 
+    // --- 5.4 ดึงข้อมูลโฆษณาและ Insights ของแต่ละแคมเปญ ---
     const campaignsWithDetails = await Promise.all(
       campaigns.map(async (campaign) => {
-        const campaignInsightsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/insights?access_token=${accessToken}&fields=${insightFields}&time_range=${timeRange}&level=campaign&use_unified_attribution_setting=true`;
-        const insightsResponse = await fetch(campaignInsightsUrl);
-        const insightsData = await insightsResponse.json();
-        const campaignInsights = insightsData.data?.[0] || null;
-        if (campaignInsights) {
-            campaignInsights.purchases = getPurchases(campaignInsights.actions);
-            campaignInsights.messaging_conversations = getMessagingConversations(campaignInsights.actions);
-        }
-
-        const adsUrl = `https://graph.facebook.com/v19.0/${campaign.id}/ads?access_token=${accessToken}&fields=name,adcreatives{thumbnail_url},insights.time_range(${timeRange}){spend,impressions,cpm,actions}&limit=50`;
+        const adsUrl = `https://graph.facebook.com/${facebookApiVersion}/${campaign.id}/ads?access_token=${accessToken}&fields=name,adcreatives{thumbnail_url},insights.time_range(${timeRange}){${insightFields}}&limit=50`;
         const adsDataResponse = await fetch(adsUrl);
         const adsData = await adsDataResponse.json();
+        if (adsData.error) {
+            console.warn(`Could not fetch ads for campaign ${campaign.id}: ${adsData.error.message}`);
+            return { ...campaign, insights: {}, ads: [] };
+        }
         
         const adsWithDetails = (adsData.data || []).map(ad => {
           const insight = ad.insights?.data?.[0];
           return {
             id: ad.id,
             name: ad.name,
-            thumbnail_url: ad.adcreatives?.data[0]?.thumbnail_url || 'https://via.placeholder.com/150',
+            thumbnail_url: ad.adcreatives?.data[0]?.thumbnail_url || 'https://placehold.co/120x120/0d0c1d/a0a0b0?text=No+Image',
             insights: {
               spend: parseFloat(insight?.spend || 0),
               impressions: parseInt(insight?.impressions || 0),
@@ -100,10 +121,25 @@ export default async function handler(req, res) {
           };
         });
 
+        // คำนวณ Insights ของแคมเปญจากการรวมผลของโฆษณาทั้งหมด
+        const campaignInsights = adsWithDetails.reduce((acc, ad) => {
+            acc.spend += ad.insights.spend;
+            acc.impressions += ad.insights.impressions;
+            acc.purchases += ad.insights.purchases;
+            acc.messaging_conversations += ad.insights.messaging_conversations;
+            return acc;
+        }, { spend: 0, impressions: 0, purchases: 0, messaging_conversations: 0 });
+
+        // คำนวณ CPM ของแคมเปญใหม่
+        campaignInsights.cpm = campaignInsights.impressions > 0 ? (campaignInsights.spend / campaignInsights.impressions) * 1000 : 0;
+
         return { ...campaign, insights: campaignInsights, ads: adsWithDetails };
       })
     );
 
+    // ================================================================
+    // 6. SEND SUCCESS RESPONSE
+    // ================================================================
     res.status(200).json({
       success: true,
       totals: {
@@ -118,13 +154,16 @@ export default async function handler(req, res) {
         cpm: parseFloat(totals.cpm || 0),
       },
       data: { 
-        campaigns: campaignsWithDetails,
+        campaigns: campaignsWithDetails.filter(c => c.insights.spend > 0), // กรองเฉพาะแคมเปญที่มีค่าใช้จ่าย
         dailySpend: dailySpend
       }
     });
 
   } catch (error) {
-    console.error('API Error:', error);
+    // ================================================================
+    // 7. SEND ERROR RESPONSE
+    // ================================================================
+    console.error('API Route Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 }
